@@ -37,12 +37,13 @@ const (
 	messageVaultStatusVerificationFailed = "Vault is not initialized or is sealed"
 	messageVaultConfigRequired           = "Vault config cannot be empty"
 	messageServerAndPathRequired         = "Vault server and path are required fields"
-	messageAuthFieldsRequired            = "Vault tokenSecretRef, appRole, or kubernetes is required"
+	messageAuthFieldsRequired            = "Vault tokenSecretRef, appRole, clientCertificate, or kubernetes is required"
 	messageMultipleAuthFieldsSet         = "Multiple auth methods cannot be set on the same Vault issuer"
 
-	messageKubeAuthFieldsRequired    = "Vault Kubernetes auth requires both role and secretRef.name"
-	messageTokenAuthNameRequired     = "Vault Token auth requires tokenSecretRef.name"
-	messageAppRoleAuthFieldsRequired = "Vault AppRole auth requires both roleId and tokenSecretRef.name"
+	messageAppRoleAuthFieldsRequired           = "Vault AppRole auth requires both roleId and tokenSecretRef.name"
+	messageClientCertificateAuthFieldsRequired = "Vault client certificate auth requires both role and secretName"
+	messageKubeAuthFieldsRequired              = "Vault Kubernetes auth requires both role and secretRef.name"
+	messageTokenAuthNameRequired               = "Vault Token auth requires tokenSecretRef.name"
 )
 
 // Setup creates a new Vault client and attempts to authenticate with the Vault instance and sets the issuer's conditions to reflect the success of the setup.
@@ -63,19 +64,21 @@ func (v *Vault) Setup(ctx context.Context) error {
 
 	tokenAuth := v.issuer.GetSpec().Vault.Auth.TokenSecretRef
 	appRoleAuth := v.issuer.GetSpec().Vault.Auth.AppRole
+	clientCertificateAuth := v.issuer.GetSpec().Vault.Auth.ClientCertificate
 	kubeAuth := v.issuer.GetSpec().Vault.Auth.Kubernetes
 
 	// check if at least one auth method is specified.
-	if tokenAuth == nil && appRoleAuth == nil && kubeAuth == nil {
+	if tokenAuth == nil && appRoleAuth == nil && clientCertificateAuth == nil && kubeAuth == nil {
 		logf.V(logf.WarnLevel).Infof("%s: %s", v.issuer.GetObjectMeta().Name, messageAuthFieldsRequired)
 		apiutil.SetIssuerCondition(v.issuer, v.issuer.GetGeneration(), v1.IssuerConditionReady, cmmeta.ConditionFalse, errorVault, messageAuthFieldsRequired)
 		return nil
 	}
 
-	// check only one auth method set
-	if (tokenAuth != nil && appRoleAuth != nil) ||
-		(tokenAuth != nil && kubeAuth != nil) ||
-		(appRoleAuth != nil && kubeAuth != nil) {
+	// check only one auth method is set
+	if !((tokenAuth != nil && appRoleAuth == nil && clientCertificateAuth == nil && kubeAuth == nil) ||
+		(tokenAuth == nil && appRoleAuth != nil && clientCertificateAuth == nil && kubeAuth == nil) ||
+		(tokenAuth == nil && appRoleAuth == nil && clientCertificateAuth != nil && kubeAuth == nil) ||
+		(tokenAuth == nil && appRoleAuth == nil && clientCertificateAuth == nil && kubeAuth != nil)) {
 		logf.V(logf.WarnLevel).Infof("%s: %s", v.issuer.GetObjectMeta().Name, messageMultipleAuthFieldsSet)
 		apiutil.SetIssuerCondition(v.issuer, v.issuer.GetGeneration(), v1.IssuerConditionReady, cmmeta.ConditionFalse, errorVault, messageMultipleAuthFieldsSet)
 		return nil
@@ -92,6 +95,13 @@ func (v *Vault) Setup(ctx context.Context) error {
 	if appRoleAuth != nil && (len(appRoleAuth.RoleId) == 0 || len(appRoleAuth.SecretRef.Name) == 0) {
 		logf.V(logf.WarnLevel).Infof("%s: %s", v.issuer.GetObjectMeta().Name, messageAppRoleAuthFieldsRequired)
 		apiutil.SetIssuerCondition(v.issuer, v.issuer.GetGeneration(), v1.IssuerConditionReady, cmmeta.ConditionFalse, errorVault, messageAppRoleAuthFieldsRequired)
+		return nil
+	}
+
+	// check if all mandatory Vault clientCertificate fields are set.
+	if clientCertificateAuth != nil && len(clientCertificateAuth.Role) == 0 {
+		logf.V(logf.WarnLevel).Infof("%s: %s", v.issuer.GetObjectMeta().Name, messageClientCertificateAuthFieldsRequired)
+		apiutil.SetIssuerCondition(v.issuer, v.issuer.GetGeneration(), v1.IssuerConditionReady, cmmeta.ConditionFalse, errorVault, messageClientCertificateAuthFieldsRequired)
 		return nil
 	}
 
