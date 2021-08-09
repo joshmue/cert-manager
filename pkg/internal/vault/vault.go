@@ -328,8 +328,11 @@ func (v *Vault) requestTokenWithClientCertificate(client Client, clientCertifica
 	}
 
 	// Setting up a short lived client with a configured client certificate. It is only meant to use for requesting a Vault token.
+	// Clone http.Client's Transport seperately as it has to be adjusted and does not seem to be cloned by CloneConfig.
 	cfg := client.CloneConfig()
-	cfg.HttpClient.Transport.(*http.Transport).TLSClientConfig.Certificates = []tls.Certificate{clientCertificate}
+	tmpTransport := cfg.HttpClient.Transport.(*http.Transport).Clone()
+	tmpTransport.TLSClientConfig.Certificates = []tls.Certificate{clientCertificate}
+	cfg.HttpClient.Transport = tmpTransport
 	client, err = vault.NewClient(cfg)
 	if err != nil {
 		return "", fmt.Errorf("error initializing intermediary Vault client: %s", err.Error())
