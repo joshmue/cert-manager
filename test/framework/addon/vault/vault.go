@@ -175,6 +175,10 @@ func (v *Vault) Setup(cfg *config.Config, leaderData ...internal.AddonTransferab
 				Value: "vault-tls",
 			},
 			{
+				Key:   "server.logLevel",
+				Value: "trace",
+			},
+			{
 				Key:   "server.volumeMounts[0].name",
 				Value: "vault-tls",
 			},

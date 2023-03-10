@@ -18,11 +18,16 @@ package vault
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
-	"net/http"
 	"net/url"
+	"net/http"
 	"path"
 	"time"
 
@@ -50,6 +55,7 @@ type VaultInitializer struct {
 	intermediateMount  string
 	role               string // AppRole auth role
 	appRoleAuthPath    string // AppRole auth mount point in Vault
+	clientCertAuthPath string // Client certificate auth mount point in Vault
 	kubernetesAuthPath string // Kubernetes auth mount point in Vault
 
 	// Whether the intermediate CA should be configured with root CA
@@ -119,6 +125,7 @@ func NewVaultInitializerAllAuth(
 	role := fmt.Sprintf("%s-role", testId)
 	appRoleAuthPath := fmt.Sprintf("%s-auth-approle", testId)
 	kubernetesAuthPath := fmt.Sprintf("%s-auth-kubernetes", testId)
+	clientCertAuthPath := fmt.Sprintf("%s-client-certificate", testId)
 
 	return &VaultInitializer{
 		kubeClient: kubeClient,
@@ -129,6 +136,7 @@ func NewVaultInitializerAllAuth(
 		role:               role,
 		appRoleAuthPath:    appRoleAuthPath,
 		kubernetesAuthPath: kubernetesAuthPath,
+		clientCertAuthPath: clientCertAuthPath,
 
 		configureWithRoot:      configureWithRoot,
 		kubernetesAPIServerURL: apiServerURL,
@@ -335,6 +343,12 @@ func (v *VaultInitializer) Setup() error {
 
 	if v.kubernetesAuthPath != "" {
 		if err := v.setupKubernetesBasedAuth(); err != nil {
+			return err
+		}
+	}
+
+	if v.clientCertAuthPath != "" {
+		if err := v.setupClientCertAuth(); err != nil {
 			return err
 		}
 	}
@@ -709,4 +723,66 @@ func CleanKubernetesRoleForServiceAccountRefAuth(client kubernetes.Interface, ro
 	}
 
 	return nil
+}
+
+func (v *VaultInitializer) setupClientCertAuth() error {
+	// vault auth-enable cert
+	auths, err := v.client.Sys().ListAuth()
+	if err != nil {
+		return fmt.Errorf("Error fetching auth mounts: %s", err.Error())
+	}
+	if _, ok := auths[v.clientCertAuthPath]; !ok {
+		options := &vault.EnableAuthOptions{Type: "cert"}
+		if err := v.client.Sys().EnableAuthWithOptions(v.clientCertAuthPath, options); err != nil {
+			return fmt.Errorf("Error enabling cert auth: %s", err.Error())
+		}
+	}
+
+	return nil
+}
+
+func (v *VaultInitializer) CreateClientCertRole() (key []byte, cert []byte, _ error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "example.com"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
+		BasicConstraintsValid: true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+
+	certificateBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	privateKeyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: privateKeyBytes})
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateBytes})
+
+	role_path := v.IntermediateSignPath()
+	policy := fmt.Sprintf(`path "%s" { capabilities = [ "create", "update" ] `, role_path)
+	err = v.client.Sys().PutPolicy(v.role, policy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Error creating policy: %s", err.Error())
+	}
+
+	// vault write auth/cert/certs/web
+	baseUrl := path.Join("/v1", "auth", v.clientCertAuthPath, "certs", v.role)
+	_, err = v.callVault("POST", baseUrl, "", map[string]string{
+		"display_name": v.role,
+		"policies":     v.role,
+		"certificate":  string(certificatePEM),
+		"ttl":          "3600",
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error configuring cert auth role: %s", err)
+	}
+
+	return privateKeyPEM, certificatePEM, nil
 }
