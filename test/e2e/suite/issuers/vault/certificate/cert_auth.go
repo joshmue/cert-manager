@@ -71,17 +71,17 @@ func runVaultCertAuthTest(fs featureset.FeatureSet) {
 	BeforeEach(func() {
 		vaultSecretNamespace = f.Namespace.Name
 		vaultInit = &vaultaddon.VaultInitializer{
-			Details:           *vault.Details(),
-			RootMount:         rootMount,
-			IntermediateMount: intermediateMount,
-			Role:              role,
-			CertAuthPath:      authPath,
+			details:           *vault.Details(),
+			rootMount:         rootMount,
+			intermediateMount: intermediateMount,
+			role:              role,
+			certAuthPath:      authPath,
 		}
 		err := vaultInit.Init()
 		Expect(err).NotTo(HaveOccurred())
 		err = vaultInit.Setup()
 		Expect(err).NotTo(HaveOccurred())
-		keyPEM, certPEM, err = vaultInit.CreateCertRole()
+		keyPEM, certPEM, err = vaultInit.CreateClientCertRole()
 		Expect(err).NotTo(HaveOccurred())
 
 		sec, err := f.KubeClientSet.CoreV1().Secrets(vaultSecretNamespace).Create(context.TODO(), &corev1.Secret{
@@ -105,7 +105,7 @@ func runVaultCertAuthTest(fs featureset.FeatureSet) {
 
 	It("should generate a new valid certificate", func() {
 		By("Creating an Issuer")
-		vaultURL := vault.Details().Host
+		vaultURL := vault.Details().URL
 
 		certClient := f.CertManagerClientSet.CertmanagerV1().Certificates(f.Namespace.Name)
 
