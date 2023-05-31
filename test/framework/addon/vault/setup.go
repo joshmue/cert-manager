@@ -63,6 +63,30 @@ type VaultInitializer struct {
 	kubernetesAPIServerURL string // Kubernetes API Server URL
 }
 
+func NewVaultInitializerClientCertificate(
+	kubeClient kubernetes.Interface,
+	details Details,
+	configureWithRoot bool,
+) *VaultInitializer {
+	testId := util.RandStringRunes(10)
+	rootMount := fmt.Sprintf("%s-root-ca", testId)
+	intermediateMount := fmt.Sprintf("%s-intermediate-ca", testId)
+	role := fmt.Sprintf("%s-role", testId)
+	clientCertAuthPath := fmt.Sprintf("%s-auth-clientcert", testId)
+
+	return &VaultInitializer{
+		kubeClient: kubeClient,
+		details:    details,
+
+		rootMount:          rootMount,
+		intermediateMount:  intermediateMount,
+		role:               role,
+		clientCertAuthPath: clientCertAuthPath,
+
+		configureWithRoot: configureWithRoot,
+	}
+}
+
 func NewVaultInitializerAppRole(
 	kubeClient kubernetes.Interface,
 	details Details,
@@ -159,6 +183,10 @@ func (v *VaultInitializer) Role() string {
 // The format is "xxxxx-auth-approle".
 func (v *VaultInitializer) AppRoleAuthPath() string {
 	return v.appRoleAuthPath
+}
+
+func (v *VaultInitializer) ClientCertificateAuthPath() string {
+	return path.Join("/v1", "auth", v.clientCertAuthPath)
 }
 
 // KubernetesAuthPath returns the Kubernetes auth mount point in Vault.
@@ -766,7 +794,7 @@ func (v *VaultInitializer) CreateClientCertRole() (key []byte, cert []byte, _ er
 	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateBytes})
 
 	role_path := v.IntermediateSignPath()
-	policy := fmt.Sprintf(`path "%s" { capabilities = [ "create", "update" ] `, role_path)
+	policy := fmt.Sprintf(`path "%s" { capabilities = [ "create", "update" ] } `, role_path)
 	err = v.client.Sys().PutPolicy(v.role, policy)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Error creating policy: %s", err.Error())
